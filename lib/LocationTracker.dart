@@ -1,71 +1,78 @@
+// Importa bibliotecas necessárias
 import 'dart:async';
-
-import 'package:flutter/material.dart';
+import 'dart:typed_data';
+import 'package:flutter/services.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-class LocationTracker extends StatefulWidget {
-  final Function(LatLng) onLocationUpdate;
+// Classe que gerencia o rastreamento de localização
+class LocationTracker {
+  // Stream que emite as atualizações da localização do ônibus
+  static Stream<LatLng> get busLocationStream => _busLocationStreamController.stream;
+  static final _busLocationStreamController = StreamController<LatLng>.broadcast();
 
-  LocationTracker({required this.onLocationUpdate});
+  // Assinatura da stream para receber atualizações
+  late StreamSubscription<LatLng> busLocationSubscription;
 
-  @override
-  _LocationTrackerState createState() => _LocationTrackerState();
-}
+  // Timer para obter periodicamente a localização do usuário
+  late Timer locationTimer;
 
-class _LocationTrackerState extends State<LocationTracker> {
-  Position? _currentPosition;
-  late Timer _timer;
+  // Construtor da classe
+  LocationTracker() {
+    // Inicia a escuta por atualizações na localização do ônibus
+    busLocationSubscription = busLocationStream.listen(_updateBusMarker);
 
- @override
-void initState() {
-  super.initState();
-  _timer = Timer.periodic(
-    Duration(seconds: 1),  //atualiza a posição a cada 1000 milliseconds
-    (Timer t) => _getCurrentLocation(),
-  );
-}
+    // Inicia um timer para obter a localização do usuário a cada segundo
+    locationTimer = Timer.periodic(Duration(seconds: 1), (Timer timer) {
+      _getCurrentLocation();
+    });
+  }
 
-  @override
+  // Método para liberar recursos quando a instância é descartada
   void dispose() {
-    _timer.cancel();
-    super.dispose();
+    busLocationSubscription.cancel();
+    _busLocationStreamController.close();
+    locationTimer.cancel();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          if (_currentPosition != null)
-            Text(
-              'Latitude: ${_currentPosition!.latitude}\nLongitude: ${_currentPosition!.longitude}',
-              style: TextStyle(fontSize: 18),
-              textAlign: TextAlign.center,
-            ),
-        ],
-      ),
-    );
+  // Método chamado quando a localização do ônibus é atualizada
+  void _updateBusMarker(LatLng busLocation) {
+    // Lógica para lidar com a atualização do marcador do ônibus
+    // (pode ser implementada aqui)
   }
 
-  _getCurrentLocation() async {
+  // Método para iniciar o rastreamento de localização
+  void startTracking() async {
+    // Solicita permissão de localização ao usuário
+    var status = await Permission.location.request();
+    if (status.isGranted) {
+      // Se a permissão for concedida, obtém a localização atual
+      _getCurrentLocation();
+    } else {
+      print('Location permission denied');
+    }
+  }
+
+  // Método para obter a localização atual do usuário
+  void _getCurrentLocation() async {
     try {
-      print('Obtendo localização atual...');
+      print('Getting current location...');
+      // Obtém a posição atual usando o pacote Geolocator
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
-      print('Localização obtida: $position');
+      print('Location obtained: $position');
 
-      setState(() {
-        _currentPosition = position;
-      });
+      // Converte a posição para um objeto LatLng
+      final LatLng userLocation = LatLng(position.latitude, position.longitude);
 
-      widget.onLocationUpdate(LatLng(position.latitude, position.longitude));
+      // Adiciona a localização do usuário à stream para notificar os ouvintes
+      _busLocationStreamController.add(userLocation);
 
-      print('Localização armazenada localmente.');
+      print('Location stored locally.');
     } catch (e) {
-      print('Erro ao obter a localização: $e');
+      print('Error getting location: $e');
     }
   }
 }

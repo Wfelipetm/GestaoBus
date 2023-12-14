@@ -1,95 +1,116 @@
+// Importa bibliotecas necessárias
+import 'dart:typed_data';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter_map_animations/flutter_map_animations.dart';
-import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:flutter/services.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'LocationTracker.dart';
 
-// Definindo um TileUpdateTransformer para animação de movimento do mapa.
-final _animatedMoveTileUpdateTransformer = TileUpdateTransformer.fromHandlers(
-  handleData: (updateEvent, sink) {
-    sink.add(updateEvent);
-  },
-);
+// Define um widget de mapa (MapView)
+class MapView extends StatefulWidget {
+  @override
+  _MapViewState createState() => _MapViewState();
+}
 
-class MapView extends StatelessWidget {
-  final AnimatedMapController animatedMapController;
-  final ValueNotifier<List<AnimatedMarker>> markers;
-  final Function(LatLng)
-      onUserLocationUpdate; // Função chamada quando a localização do usuário é atualizada.
+// Define o estado do widget MapView
+class _MapViewState extends State<MapView> {
+  // Conjunto de marcadores no mapa
+  final Set<Marker> markers = {};
 
-  // Construtor da classe MapView.
-  const MapView({
-    Key? key,
-    required this.animatedMapController,
-    required this.markers,
-    required this.onUserLocationUpdate,
-  }) : super(key: key);
+  // Controlador do mapa do Google
+  late GoogleMapController googleMapController;
 
-  // Obtém o TileUpdateTransformer para animação do mapa.
-  TileUpdateTransformer? get tileUpdateTransformer =>
-      _animatedMoveTileUpdateTransformer;
+  // Objeto para rastreamento de localização
+  late LocationTracker locationTracker;
 
+  // Método chamado quando o estado é inicializado
+  @override
+  void initState() {
+    super.initState();
+
+    // Inicializa o rastreador de localização
+    locationTracker = LocationTracker();
+    locationTracker.startTracking();
+
+    // Escuta por atualizações na localização do ônibus
+    LocationTracker.busLocationStream.listen(_updateBusMarker);
+  }
+
+  // Método chamado quando o estado é descartado
+  @override
+  void dispose() {
+    // Descarta o rastreador de localização
+    locationTracker.dispose();
+    super.dispose();
+  }
+
+  // Método chamado para construir a interface do usuário
   @override
   Widget build(BuildContext context) {
-    // Widget ValueListenableBuilder usado para reconstruir o FlutterMap sempre que a lista de marcadores (markers) é atualizada.
-    return ValueListenableBuilder<List<AnimatedMarker>>(
-      valueListenable: markers,
-      builder: (context, markers, _) {
-        return FlutterMap(
-          // Configuração do FlutterMap.
-          mapController: animatedMapController.mapController,
-          options: MapOptions(
-            initialCenter:
-                const LatLng(-22.8665, -43.7772), // Centro inicial do mapa.
-            // onTap: (_, point) =>
-            //  _addMarker(point), // Adiciona um marcador no local do toque.
-            maxZoom: 30.0,
-          ),
-          children: [
-            // Camada de azulejos do OpenStreetMap.
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.app',
-              tileUpdateTransformer: tileUpdateTransformer,
-              tileProvider: CancellableNetworkTileProvider(),
+    return Column(
+      children: [
+        Expanded(
+          child: GoogleMap(
+            // Callback chamado quando o mapa é criado
+            onMapCreated: _onMapCreated,
+            // Configuração inicial da câmera
+            initialCameraPosition: CameraPosition(
+              target: LatLng(-22.8665, -43.7772),
+              zoom: 14,
             ),
-            // Camada de marcadores animados.
-            AnimatedMarkerLayer(markers: markers),
-          ],
-        );
-      },
+            // Conjunto de marcadores a serem exibidos no mapa
+            markers: markers,
+          ),
+        ),
+      ],
     );
   }
 
-  // Adiciona um marcador à lista de marcadores.
-  void _addMarker(LatLng point) {
-    markers.value = List.from(markers.value)
-      ..add(
-        AnimatedMarker(
-          point: point,
-          width: 50.0,
-          height: 50.0,
-          builder: (context, animation) {
-            // Constrói um marcador animado.
-            final size = 50.0 * animation.value;
+  // Callback chamado quando o mapa é criado
+  void _onMapCreated(GoogleMapController controller) {
+    googleMapController = controller;
+  }
 
-            return GestureDetector(
-              onTap: () {
-                animatedMapController.animateTo(
-                    dest: point); // Anima o mapa até o ponto do marcador.
-                onUserLocationUpdate(
-                    point); // Chama a função de atualização da localização do usuário.
-              },
-              child: Opacity(
-                opacity: animation.value,
-                child: Icon(
-                  Icons.room, // Ícone do marcador.
-                  size: size,
-                ),
-              ),
-            );
-          },
+  // Método para atualizar a posição do marcador do ônibus no mapa
+  void _updateBusMarker(LatLng busLocation) async {
+    // Anima a câmera para a nova localização do ônibus
+    googleMapController.animateCamera(
+      CameraUpdate.newLatLng(busLocation),
+    );
+
+    // Obtém o ícone do ônibus redimensionado
+    final BitmapDescriptor busIcon = await _getResizedBusIcon();
+
+    // Atualiza o conjunto de marcadores no estado do widget
+    setState(() {
+      markers.clear();
+      markers.add(
+        Marker(
+          markerId: MarkerId('busLocation'),
+          position: busLocation,
+          icon: busIcon,
         ),
       );
+    });
+  }
+
+  // Método para obter o ícone do ônibus redimensionado
+  Future<BitmapDescriptor> _getResizedBusIcon() async {
+    // Carrega a imagem do ícone do ônibus
+    final ByteData data = await rootBundle.load('assets/images/man.png');
+    final Uint8List bytes = data.buffer.asUint8List();
+
+    // Redimensiona a imagem do ícone do ônibus
+    final codec = await instantiateImageCodec(
+      bytes,
+      targetHeight: 100,
+      targetWidth: 100,
+    );
+    final FrameInfo frameInfo = await codec.getNextFrame();
+    final ByteData? resizedData = await frameInfo.image.toByteData(format: ImageByteFormat.png);
+
+    // Retorna o ícone do ônibus redimensionado como um BitmapDescriptor
+    return BitmapDescriptor.fromBytes(resizedData!.buffer.asUint8List());
   }
 }
